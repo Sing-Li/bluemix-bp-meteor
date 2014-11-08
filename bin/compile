@@ -38,6 +38,18 @@ function indent() {
   esac
 }
 
+function server_npm_install() {
+  appdir="$1"
+
+  cd "$appdir"/programs/server
+  HOME="$appdir"/programs/server $VENDORED_NODE/bin/node $VENDORED_NODE/bin/npm install 2>&1 | indent
+
+  if [ "${PIPESTATUS[*]}" != "0 0" ]; then
+    echo " !     Failed to $command dependencies with npm"
+    exit 1
+  fi
+}
+
 function run_npm() {
   command="$1"
 
@@ -143,8 +155,7 @@ rm "$CACHE_DIR"/"$BUNDLENAME"
 
 echo "Installing server-side dependencies" | indent
 
-cd "$METEOR_BUILD_DIR"/app/programs/server 
-run_npm "install"
+server_npm_install "$METEOR_BUILD_DIR"/app
 
 ############################################
 
