@@ -139,6 +139,13 @@ echo "Bundle name is $BUNDLENAME" | indent
 
 tar -zxf "$CACHE_DIR"/"$BUNDLENAME" --strip-components 1 -C "$METEOR_BUILD_DIR"/app
 rm "$CACHE_DIR"/"$BUNDLENAME"
+
+
+echo "Installing server-side dependencies" | indent
+
+cd "$METEOR_BUILD_DIR"/app/programs/server 
+run_npm "install"
+
 ############################################
 
 ############################################
