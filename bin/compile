@@ -124,12 +124,19 @@ VENDORED_METEOR="$(mktmpdir meteor)"
 curl https://install.meteor.com | HOME="$VENDORED_METEOR" /bin/sh | indent
 echo "Meteor installed" | indent
 
+"$VENDORED_METEOR"/.meteor/meteor --version | indent
+
 # build creates a directory with (one or more) bundles in it
 echo "Building meteor bundle" | indent
 HOME="$VENDORED_METEOR" "$VENDORED_METEOR"/.meteor/meteor build "$CACHE_DIR" 2>&1 | indent
 
+
 mkdir -p "$METEOR_BUILD_DIR"/app
+
 BUNDLENAME="`basename $BUILD_DIR`.tar.gz"
+
+echo "Bundle name is $BUNDLENAME" | indent
+
 tar -zxf "$CACHE_DIR"/"$BUNDLENAME" --strip-components 1 -C "$METEOR_BUILD_DIR"/app
 rm "$CACHE_DIR"/"$BUNDLENAME"
 ############################################
