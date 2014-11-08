@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# bin/compile <build-dir> <cache-dir>
+
+# fail fast
+set -e
+
+# debug
+# set -x
+
+# clean up leaking environment
+unset GIT_DIR
+
+# parse and derive params
+BUILD_DIR=$1
+CACHE_DIR=$2
+LP_DIR=`cd $(dirname $0); cd ..; pwd`
+
+[ ! -d $BUILD_DIR ] && mkdir $BUILD_DIR
+[ ! -d $CACHE_DIR ] && mkdir $CACHE_DIR
+
+function error() {
+  echo " !     $*"
+  exit 1
+}
+
+function mktmpdir() {
+  dir=$(mktemp -t node-$1-XXXX)
+  rm -rf $dir
+  mkdir -p $dir
+  echo $dir
+}
+
+function indent() {
+  c='s/^/       /'
+  case $(uname) in
+    Darwin) sed -l "$c";;
+    *)      sed -u "$c";;
+  esac
+}
+
+function run_npm() {
+  command="$1"
+
+  cd "$BUILD_DIR"
+  HOME="$BUILD_DIR" $VENDORED_NODE/bin/node $VENDORED_NODE/bin/npm $command 2>&1 | indent
+
+  if [ "${PIPESTATUS[*]}" != "0 0" ]; then
+    echo " !     Failed to $command dependencies with npm"
+    exit 1
+  fi
+}
+
+function package_download() {
+  engine="$1"
+  version="$2"
+  location="$3"
+
+  mkdir -p $location
+  package="http://s3pository.heroku.com/$engine/v$version/$engine-v$version-linux-x64.tar.gz"
+  echo " - downloading and extracting $engine from $package" | indent
+  curl $package -s -o - | tar -zxf  - -C $location --strip 1
+}
+
+echo "-----> Resolving engine versions"
+
+#TODO: Fix package.json loading
+#if [ -f "${BUILD_DIR}/package.json" ]; then
+#  requested_node_ver=$(cat $BUILD_DIR/package.json | $LP_DIR/vendor/jq -r .engines.node)
+#fi
+#temporary - load from nodeversion
+requested_node_ver=""
+if [ -f "${BUILD_DIR}/nodeversion" ]; then
+  echo " - nodeversion file detected, using for semvar" | indent
+  requested_node_ver=$(cat $BUILD_DIR/nodeversion)
+  echo " - requested version: $requested_node_ver" | indent
+fi
+# add a warning if no version of node specified
+if [ "$requested_node_ver" == "" ]; then
+  requested_node_ver="0.10.29"
+  echo
+  echo "No version of Node.js specified in nodeversion, using '${requested_node_ver}'" | indent
+  echo
+fi
+
+NODE_VERSION=$(curl --silent --get --data-urlencode "range=${requested_node_ver}" https://semver.io/node/resolve)
+echo "Using Node.js version: ${NODE_VERSION}" | indent
+
+# vendor directories
+VENDORED_NODE="$(mktmpdir node)"
+VENDORED_MODULES="$(mktmpdir modules)"
+
+# download and unpack packages
+echo "-----> Fetching Node.js binaries"
+package_download "node" "${NODE_VERSION}" "${VENDORED_NODE}"
+
+# setting up paths for building
+PATH="$VENDORED_NODE/bin:$VENDORED_MODULES/bin:$PATH"
+INCLUDE_PATH="$VENDORED_NODE/include"
+export npm_config_prefix="$VENDORED_MODULES"
+export CPATH="$INCLUDE_PATH"
+export CPPPATH="$INCLUDE_PATH"
+
+############################################
+# install jsontool 
+############################################
+echo "-----> Installing jsontool with npm"
+
+run_npm "install jsontool -g"
+echo "jsontool installed" | indent
+
+
+
+METEOR_BUILD_DIR="$BUILD_DIR/.meteor/heroku_build"
+mkdir -p "$HOME"
+############################################
+# install meteor + packages through mrt
+# bundle, and install into app/
+############################################
+cd $BUILD_DIR
+echo "Installing meteor" | indent
+
+# Using different folder to prevent install script form deleting packages file
+VENDORED_METEOR="$(mktmpdir meteor)"
+curl https://install.meteor.com | HOME="$VENDORED_METEOR" /bin/sh | indent
+echo "Meteor installed" | indent
+
+# build creates a directory with (one or more) bundles in it
+echo "Building meteor bundle" | indent
+HOME="$VENDORED_METEOR" "$VENDORED_METEOR"/.meteor/meteor build "$CACHE_DIR" 2>&1 | indent
+
+mkdir -p "$METEOR_BUILD_DIR"/app
+BUNDLENAME="`basename $BUILD_DIR`.tar.gz"
+tar -zxf "$CACHE_DIR"/"$BUNDLENAME" --strip-components 1 -C "$METEOR_BUILD_DIR"/app
+rm "$CACHE_DIR"/"$BUNDLENAME"
+############################################
+
+############################################
+# Prepare ENV vars
+############################################
+echo "Setting up MONGO_URL in .profile.d"
+mkdir -p "$BUILD_DIR"/.profile.d
+cat > "$BUILD_DIR"/.profile.d/mongo.sh <<EOF
+  #!/bin/sh
+  export MONGO_URL=\`echo \$VCAP_SERVICES | sed 's/^.*url\\":\\"//' | sed 's/\\".*\$//'\`;
+  URLS=\`echo \$VCAP_APPLICATION | sed 's/^.*application_uris\\":\[\\"//' | sed 's/\\".*\$//'\`;
+  HD="http://";
+  export ROOT_URL="\$HD\$URLS/";
+  
+EOF
+
+# vendor node into the slug
+PATH="$METEOR_BUILD_DIR/bin:$PATH"
+echo "-----> Vendoring node into slug"
+mkdir -p "$METEOR_BUILD_DIR/bin"
+cp "$VENDORED_NODE/bin/node" "$METEOR_BUILD_DIR/bin/node"
